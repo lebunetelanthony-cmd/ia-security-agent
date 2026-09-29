@@ -1,0 +1,12 @@
+[Unit]
+Description=IA Security Agent optional nightly LLM timer
+
+[Timer]
+OnCalendar=@ON_CALENDAR@
+Persistent=true
+AccuracySec=1min
+
+Unit=ia-security-agent-nightly-llm.service
+
+[Install]
+WantedBy=timers.target

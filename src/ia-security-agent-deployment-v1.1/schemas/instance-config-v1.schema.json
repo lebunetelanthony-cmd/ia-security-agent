@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ia-security-agent-instance-config-v1.schema.json",
+  "title": "IA Security Agent Instance Config V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "identity",
+    "deployment",
+    "filesystem",
+    "service",
+    "locale",
+    "collectors",
+    "integrations",
+    "nightly_llm",
+    "privileged_helper",
+    "security_invariants"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ia-security-agent-instance-config-v1"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostname",
+        "instance_id",
+        "installation_id",
+        "created_at"
+      ],
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "installation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_version",
+        "control_manifest_sha256"
+      ],
+      "properties": {
+        "deployment_version": {
+          "const": "1"
+        },
+        "control_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "filesystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_root"
+      ],
+      "properties": {
+        "runtime_root": {
+          "type": "string",
+          "minLength": 2
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "group",
+        "python_bin"
+      ],
+      "properties": {
+        "user": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "python_bin": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "locale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timezone"
+      ],
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "collectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core",
+        "optional"
+      ],
+      "properties": {
+        "core": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "optional": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "integrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "zabbix"
+      ],
+      "properties": {
+        "zabbix": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "nightly_llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "privileged_helper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "security_invariants": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "minItems": 11
+    }
+  }
+}

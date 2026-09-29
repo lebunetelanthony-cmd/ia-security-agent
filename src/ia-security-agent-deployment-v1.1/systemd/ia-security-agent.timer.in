@@ -1,0 +1,13 @@
+[Unit]
+Description=IA Security Agent deterministic cycle timer
+
+[Timer]
+OnCalendar=@ON_CALENDAR@
+Persistent=true
+RandomizedDelaySec=@RANDOMIZED_DELAY_SEC@
+AccuracySec=1min
+
+Unit=ia-security-agent.service
+
+[Install]
+WantedBy=timers.target

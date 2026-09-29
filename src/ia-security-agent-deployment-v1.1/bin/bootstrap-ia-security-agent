@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export LC_ALL=C
+
+SELF="$(readlink -f "$0")"
+PKG="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+exec python3 \
+    "$PKG/bootstrap/bootstrap-v1.py" \
+    --package-root "$PKG" \
+    "$@"

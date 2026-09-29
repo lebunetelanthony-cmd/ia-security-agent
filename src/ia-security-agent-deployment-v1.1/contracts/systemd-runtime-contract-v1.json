@@ -1,0 +1,38 @@
+{
+  "schema": "ia-security-agent-systemd-runtime-contract-v1",
+  "deployment_version": "1",
+
+  "runtime_entrypoint": "bin/ia-security-agent-cycle",
+  "core_engine": "lib/agent-cycle-v1.py",
+
+  "core_engine_required_for_production_cycle": true,
+  "runtime_self_test_without_core_engine_allowed": true,
+
+  "systemd": {
+    "service_template": "systemd/ia-security-agent.service.in",
+    "timer_template": "systemd/ia-security-agent.timer.in",
+    "installation_during_d7_allowed": false,
+    "activation_during_d7_allowed": false
+  },
+
+  "filesystem_policy": {
+    "package": "READ_ONLY",
+    "instance_config": "READ_ONLY",
+    "baseline": "READ_ONLY_AFTER_INITIAL_VALIDATION",
+    "history": "READ_WRITE",
+    "state": "READ_WRITE",
+    "reports": "READ_WRITE",
+    "runs": "READ_WRITE",
+    "attempts": "READ_WRITE",
+    "failures": "READ_WRITE",
+    "commits": "READ_WRITE",
+    "locks": "READ_WRITE"
+  },
+
+  "runtime_failure_policy": {
+    "fail_closed": true,
+    "missing_core_engine": "REFUSED",
+    "invalid_instance_config": "REFUSED",
+    "unknown_or_ambiguous": "REFUSED"
+  }
+}

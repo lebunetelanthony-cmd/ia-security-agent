@@ -1,0 +1,49 @@
+{
+  "schema": "ia-security-agent-failure-evidence-contract-v1",
+  "deployment_version": "1",
+
+  "failure_evidence": {
+    "append_only": true,
+    "overwrite_allowed": false,
+    "same_attempt_retry_allowed": false,
+    "deletion_allowed": false
+  },
+
+  "rollback": {
+    "automatic": false,
+    "requires_materialized_refusal": true,
+
+    "allowed_scope": "INSTANCE_RUNTIME_ATTEMPTS_SUBTREE_ONLY",
+
+    "forbidden_targets": [
+      "instance root",
+      "config",
+      "baseline",
+      "history",
+      "state",
+      "reports",
+      "runs",
+      "failures",
+      "commits",
+      "locks",
+      "control plane"
+    ],
+
+    "symlinked_workspace_allowed": false,
+
+    "plan_evidence_required": true,
+    "result_evidence_required": true,
+
+    "existing_failure_evidence_must_be_preserved": true
+  },
+
+  "invariants": [
+    "FAIL_CLOSED",
+    "APPEND_ONLY",
+    "NO_BLIND_RETRY",
+    "PRESERVE_FAILURE_EVIDENCE",
+    "NO_AUTOMATIC_REMEDIATION",
+    "NO_AUTOMATIC_RISK_ACCEPTANCE",
+    "NO_AUTOMATIC_DEFERRAL"
+  ]
+}

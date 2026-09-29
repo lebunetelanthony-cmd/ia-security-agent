@@ -1,0 +1,319 @@
+{
+  "codes": [
+    {
+      "code": "DPL1.ACTIVATION.FINAL_VALIDATION_FAILED"
+    },
+    {
+      "code": "DPL1.BOOTSTRAP.CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.BOOTSTRAP.INSTANCE_IDENTITY_FAILED"
+    },
+    {
+      "code": "DPL1.BOOTSTRAP.PERMISSION_INCOMPATIBLE"
+    },
+    {
+      "code": "DPL1.BOOTSTRAP.TARGET_ALREADY_EXISTS"
+    },
+    {
+      "code": "DPL1.BOOTSTRAP.TRANSACTION_COLLISION"
+    },
+    {
+      "code": "DPL1.BOOTSTRAP.TRANSACTION_FAILED"
+    },
+    {
+      "code": "DPL1.CORE.COLLECTOR_INVALID"
+    },
+    {
+      "code": "DPL1.CORE.COLLECTOR_MISSING"
+    },
+    {
+      "code": "DPL1.CORE.CONTROL_MANIFEST_MISMATCH"
+    },
+    {
+      "code": "DPL1.CORE.CONTROL_MANIFEST_MISSING"
+    },
+    {
+      "code": "DPL1.CORE.CYCLE_FAILED"
+    },
+    {
+      "code": "DPL1.CORE.HEAD_INVALID"
+    },
+    {
+      "code": "DPL1.CORE.INSTANCE_CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.CORE.LOCK_BUSY"
+    },
+    {
+      "code": "DPL1.CORE.ORPHAN_COMMITTED_RUN"
+    },
+    {
+      "code": "DPL1.CORE.POST_COMMIT_FAILURE"
+    },
+    {
+      "code": "DPL1.CORE.PREVIOUS_OBSERVATION_INVALID"
+    },
+    {
+      "code": "DPL1.CORE.UNRESOLVED_POST_COMMIT_FAILURE"
+    },
+    {
+      "code": "DPL1.FAILURE.ATTEMPT_ID_INVALID"
+    },
+    {
+      "code": "DPL1.FAILURE.DETAILS_INVALID"
+    },
+    {
+      "code": "DPL1.FAILURE.EVIDENCE_ALREADY_EXISTS"
+    },
+    {
+      "code": "DPL1.FAILURE.EVIDENCE_MATERIALIZATION_FAILED"
+    },
+    {
+      "code": "DPL1.FAILURE.INSTANCE_CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.FAILURE.INSTANCE_CONFIG_MISSING"
+    },
+    {
+      "code": "DPL1.FAILURE.REASON_CODE_INVALID"
+    },
+    {
+      "code": "DPL1.FAILURE.STAGE_INVALID"
+    },
+    {
+      "code": "DPL1.FAILURE.UNKNOWN_COMMAND"
+    },
+    {
+      "code": "DPL1.HOST.DEPENDENCY_MISSING"
+    },
+    {
+      "code": "DPL1.HOST.OS_UNSUPPORTED"
+    },
+    {
+      "code": "DPL1.HOST.PYTHON_VERSION_UNSUPPORTED"
+    },
+    {
+      "code": "DPL1.INSTALL.BASELINE_MODE_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.CANNOT_SWITCH_SERVICE_USER"
+    },
+    {
+      "code": "DPL1.INSTALL.COMMAND_FAILED"
+    },
+    {
+      "code": "DPL1.INSTALL.DEPENDENCY_MISSING"
+    },
+    {
+      "code": "DPL1.INSTALL.DISK_SPACE_INSUFFICIENT"
+    },
+    {
+      "code": "DPL1.INSTALL.EXISTING_CONTROL_ROOT"
+    },
+    {
+      "code": "DPL1.INSTALL.EXISTING_RUNTIME_ROOT"
+    },
+    {
+      "code": "DPL1.INSTALL.HOST_IDENTITY_MISMATCH"
+    },
+    {
+      "code": "DPL1.INSTALL.INITIAL_CYCLE_FAILED"
+    },
+    {
+      "code": "DPL1.INSTALL.INITIAL_CYCLE_OUTPUT_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.INITIAL_VALIDATION_FAILED"
+    },
+    {
+      "code": "DPL1.INSTALL.INTERNAL_IDENTITY_ERROR"
+    },
+    {
+      "code": "DPL1.INSTALL.PACKAGE_SYMLINK_FOUND"
+    },
+    {
+      "code": "DPL1.INSTALL.PATH_COLLISION"
+    },
+    {
+      "code": "DPL1.INSTALL.PATH_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.POSITIVE_EVIDENCE_INCOMPLETE"
+    },
+    {
+      "code": "DPL1.INSTALL.PREFLIGHT_FAILED"
+    },
+    {
+      "code": "DPL1.INSTALL.PREFLIGHT_INVALID_OUTPUT"
+    },
+    {
+      "code": "DPL1.INSTALL.RESOLUTION_POLICY_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.ROOT_REQUIRED"
+    },
+    {
+      "code": "DPL1.INSTALL.RUNTIME_PARENT_MISSING"
+    },
+    {
+      "code": "DPL1.INSTALL.SERVICE_GROUP_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.SERVICE_USER_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.SIMULATION_ROOT_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.SOURCE_PACKAGE_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.SYSTEMD_CONFLICT"
+    },
+    {
+      "code": "DPL1.INSTALL.TIMEZONE_INVALID"
+    },
+    {
+      "code": "DPL1.INSTALL.UNEXPECTED_FAILURE"
+    },
+    {
+      "code": "DPL1.INTERNAL.PREFLIGHT_SELF_MISSING"
+    },
+    {
+      "code": "DPL1.INTERNAL.PREFLIGHT_WRAPPER_MISSING"
+    },
+    {
+      "code": "DPL1.LLM.CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.LLM.INFERENCE_FAILED"
+    },
+    {
+      "code": "DPL1.LLM.INPUT_INVALID"
+    },
+    {
+      "code": "DPL1.LLM.INSTANCE_CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.LLM.MODEL_DIGEST_MISMATCH"
+    },
+    {
+      "code": "DPL1.LLM.MODEL_MISSING"
+    },
+    {
+      "code": "DPL1.LLM.PROVIDER_UNAVAILABLE"
+    },
+    {
+      "code": "DPL1.LLM.PROVIDER_VALIDATION_FAILED"
+    },
+    {
+      "code": "DPL1.LLM.PROVIDER_VERSION_MISMATCH"
+    },
+    {
+      "code": "DPL1.LLM.SYSTEMD_COMPONENT_MISSING"
+    },
+    {
+      "code": "DPL1.LLM.SYSTEMD_CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.LLM.SYSTEMD_OUTPUT_EXISTS"
+    },
+    {
+      "code": "DPL1.LLM.UNRESOLVED_TEMPLATE_TOKEN"
+    },
+    {
+      "code": "DPL1.PACKAGE.CHECKSUM_MISMATCH"
+    },
+    {
+      "code": "DPL1.PACKAGE.FORBIDDEN_RUNTIME_FOUND"
+    },
+    {
+      "code": "DPL1.PACKAGE.MANIFEST_INVALID"
+    },
+    {
+      "code": "DPL1.PACKAGE.REQUIRED_DIRECTORY_MISSING"
+    },
+    {
+      "code": "DPL1.PACKAGE.REQUIRED_FILE_MISSING"
+    },
+    {
+      "code": "DPL1.PACKAGE.ROOT_MISSING"
+    },
+    {
+      "code": "DPL1.PACKAGE.SECRET_MATERIAL_FOUND"
+    },
+    {
+      "code": "DPL1.PACKAGE.UNMANIFESTED_FILE_FOUND"
+    },
+    {
+      "code": "DPL1.ROLLBACK.ALREADY_MATERIALIZED"
+    },
+    {
+      "code": "DPL1.ROLLBACK.FAILURE_EVIDENCE_MUTATED"
+    },
+    {
+      "code": "DPL1.ROLLBACK.MATERIALIZED_REFUSAL_REQUIRED"
+    },
+    {
+      "code": "DPL1.ROLLBACK.REFUSAL_EVIDENCE_INVALID"
+    },
+    {
+      "code": "DPL1.ROLLBACK.REMOVAL_FAILED"
+    },
+    {
+      "code": "DPL1.ROLLBACK.SYMLINK_FOUND"
+    },
+    {
+      "code": "DPL1.ROLLBACK.SYMLINK_WORKSPACE_REFUSED"
+    },
+    {
+      "code": "DPL1.ROLLBACK.UNKNOWN_OBJECT_TYPE"
+    },
+    {
+      "code": "DPL1.ROLLBACK.WORKSPACE_MISSING"
+    },
+    {
+      "code": "DPL1.ROLLBACK.WORKSPACE_OUTSIDE_ATTEMPTS"
+    },
+    {
+      "code": "DPL1.ROLLBACK.WORKSPACE_SCOPE_INVALID"
+    },
+    {
+      "code": "DPL1.RUNTIME.CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.RUNTIME.CONFIG_MISSING"
+    },
+    {
+      "code": "DPL1.RUNTIME.CORE_ENGINE_MISSING"
+    },
+    {
+      "code": "DPL1.RUNTIME.RUNTIME_TREE_INVALID"
+    },
+    {
+      "code": "DPL1.SYSTEMD.CONFIG_INVALID"
+    },
+    {
+      "code": "DPL1.SYSTEMD.CONFIG_MISSING"
+    },
+    {
+      "code": "DPL1.SYSTEMD.OUTPUT_EXISTS"
+    },
+    {
+      "code": "DPL1.SYSTEMD.PACKAGE_ROOT_INVALID"
+    },
+    {
+      "code": "DPL1.SYSTEMD.RUNTIME_ENTRYPOINT_MISSING"
+    },
+    {
+      "code": "DPL1.SYSTEMD.TEMPLATE_MISSING"
+    },
+    {
+      "code": "DPL1.SYSTEMD.UNRESOLVED_TEMPLATE_TOKEN"
+    }
+  ],
+  "immutability": "MEANING_MUST_NOT_CHANGE",
+  "namespace": "DPL1",
+  "schema": "ia-security-agent-reason-code-registry-v1"
+}

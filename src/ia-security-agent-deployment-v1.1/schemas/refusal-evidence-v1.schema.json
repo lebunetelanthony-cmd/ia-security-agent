@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "refusal-evidence-v1.schema.json",
+  "title": "IA Security Agent Refusal Evidence V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "stage",
+    "status",
+    "reason_code",
+    "attempt_id",
+    "timestamp",
+    "same_attempt_retry_allowed",
+    "append_only",
+    "details"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ia-security-agent-refusal-evidence-v1"
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "const": "REFUSED"
+    },
+    "reason_code": {
+      "type": "string",
+      "pattern": "^DPL1\\.[A-Z0-9_.-]+$"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "same_attempt_retry_allowed": {
+      "const": false
+    },
+    "append_only": {
+      "const": true
+    },
+    "details": {
+      "type": "object"
+    }
+  }
+}

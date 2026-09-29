@@ -1,0 +1,53 @@
+{
+  "schema": "ia-security-agent-bootstrap-contract-v1",
+  "deployment_version": "1",
+
+  "transaction_model": "STAGE_VALIDATE_ATOMIC_COMMIT",
+
+  "source_host_state_import_allowed": false,
+  "existing_target_overwrite_allowed": false,
+  "same_attempt_retry_after_materialized_failure": false,
+
+  "instance_identity": {
+    "instance_id": "LOCALLY_GENERATED_UUID",
+    "installation_id": "LOCALLY_GENERATED_UUID"
+  },
+
+  "runtime_directories": [
+    "baseline",
+    "history/raw",
+    "history/meta",
+    "history/diff",
+    "history/impact",
+    "state",
+    "reports",
+    "runs",
+    "attempts",
+    "failures",
+    "commits",
+    "locks"
+  ],
+
+  "local_configuration": "config/instance-config-v1.json",
+
+  "privileged_helper_secret": {
+    "package_contains_secret": false,
+    "generated_locally_when_enabled": true,
+    "relative_path": "config/secrets/helper-hmac.key",
+    "mode": "0600"
+  },
+
+  "security_invariants": [
+    "FAIL_CLOSED",
+    "APPEND_ONLY",
+    "SHA256_VERIFIED",
+    "POSITIVE_EVIDENCE_REQUIRED",
+    "UNKNOWN_REMAINS_UNKNOWN",
+    "NO_RESOLUTION_FROM_ABSENCE",
+    "NO_BLIND_RETRY",
+    "PRESERVE_FAILURE_EVIDENCE",
+    "NO_AUTOMATIC_REMEDIATION",
+    "NO_AUTOMATIC_RISK_ACCEPTANCE",
+    "NO_AUTOMATIC_DEFERRAL"
+  ]
+}

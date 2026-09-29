@@ -1,0 +1,36 @@
+{
+  "authoritative_security_state": false,
+  "authority": "NON_FACTUAL_CONSUMER",
+  "automatic_deferral": false,
+  "automatic_remediation": false,
+  "automatic_retry": false,
+  "automatic_risk_acceptance": false,
+  "evidence_deletion": false,
+  "failure_policy": "FAIL_CLOSED_PRESERVE_EVIDENCE",
+  "implementation_revision": "nightly-llm-v5-generic",
+  "input_authority": "DETERMINISTIC_CORE_ONLY",
+  "output_schema": "nightly-security-analysis-v1",
+  "permissions": {
+    "attempt_mkdir_requested_mode": "0750",
+    "sgid_required": false
+  },
+  "publication": {
+    "final_rename": "SAME_PARENT_ONLY",
+    "interdirectory_rename": false,
+    "mode": "VERIFIED_COPY",
+    "pending_name_prefix": ".pending-"
+  },
+  "raw_evidence_preservation": true,
+  "runtime": {
+    "num_ctx": 16384,
+    "num_predict": 2048,
+    "seed": 0,
+    "stream": false,
+    "temperature": 0,
+    "think": false
+  },
+  "runtime_source": "VALIDATED_PRODUCTION_NIGHTLY_LLM_CONTRACT",
+  "schema": "ia-security-agent-nightly-llm-contract-v1",
+  "strict_output_schema": true,
+  "validator_alignment_required": true
+}

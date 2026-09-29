@@ -1,0 +1,2230 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import grp
+import hashlib
+import json
+import os
+import platform
+import pwd
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+import uuid
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+RESULT_SCHEMA = "ia-security-agent-stage-result-v1"
+
+EXIT_VALID = 0
+EXIT_REFUSED = 20
+
+CORE_SERVICE = "ia-security-agent.service"
+CORE_TIMER = "ia-security-agent.timer"
+
+LLM_SERVICE = "ia-security-agent-nightly-llm.service"
+LLM_TIMER = "ia-security-agent-nightly-llm.timer"
+
+REQUIRED_COMMANDS = [
+    "python3",
+    "systemctl",
+    "systemd-analyze",
+    "sha256sum",
+    "runuser",
+    "dpkg-query",
+    "ip",
+    "ss",
+    "findmnt",
+]
+
+
+class InstallRefused(Exception):
+
+    def __init__(
+        self,
+        code: str,
+        details: dict[str, Any],
+    ) -> None:
+
+        super().__init__(code)
+
+        self.code = code
+        self.details = details
+
+
+def utc_now() -> str:
+
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def sha256_file(
+    path: Path,
+) -> str:
+
+    h = hashlib.sha256()
+
+    with path.open("rb") as f:
+
+        for block in iter(
+            lambda: f.read(1024 * 1024),
+            b"",
+        ):
+            h.update(block)
+
+    return h.hexdigest()
+
+
+def exclusive_json(
+    path: Path,
+    obj: dict[str, Any],
+    mode: int = 0o640,
+) -> None:
+
+    data = (
+        json.dumps(
+            obj,
+            sort_keys=True,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+    fd = os.open(
+        path,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL,
+        mode,
+    )
+
+    with os.fdopen(fd, "wb") as f:
+
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def emit(
+    *,
+    status: str,
+    reason_code: str | None,
+    details: dict[str, Any],
+) -> None:
+
+    print(
+        json.dumps(
+            {
+                "schema":
+                    RESULT_SCHEMA,
+
+                "stage":
+                    "INSTALL",
+
+                "status":
+                    status,
+
+                "reason_code":
+                    reason_code,
+
+                "next_stage_authorized":
+                    status == "VALID",
+
+                "details":
+                    details,
+            },
+            sort_keys=True,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
+def refuse(
+    code: str,
+    **details: Any,
+) -> "NoReturn":
+
+    raise InstallRefused(
+        code,
+        details,
+    )
+
+
+def safe_absolute(
+    name: str,
+    value: str,
+) -> Path:
+
+    if (
+        not value
+        or "\x00" in value
+        or "\n" in value
+        or "\r" in value
+    ):
+        refuse(
+            "DPL1.INSTALL.PATH_INVALID",
+            field=name,
+        )
+
+    p = Path(value)
+
+    if not p.is_absolute():
+        refuse(
+            "DPL1.INSTALL.PATH_INVALID",
+            field=name,
+            error="must be absolute",
+        )
+
+    if any(
+        c.isspace()
+        for c in value
+    ):
+        refuse(
+            "DPL1.INSTALL.PATH_INVALID",
+            field=name,
+            error="whitespace forbidden",
+        )
+
+    return p.resolve(
+        strict=False
+    )
+
+
+def default_timezone() -> str:
+
+    path = Path(
+        "/etc/timezone"
+    )
+
+    if path.is_file():
+
+        value = path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).strip()
+
+        if value:
+            return value
+
+    return "UTC"
+
+
+def resolve_identity(
+    requested_user: str | None,
+    requested_group: str | None,
+) -> tuple[str, str, int, int]:
+
+    user = requested_user
+
+    if not user:
+
+        sudo_user = os.environ.get(
+            "SUDO_USER"
+        )
+
+        if (
+            sudo_user
+            and sudo_user != "root"
+        ):
+            user = sudo_user
+        else:
+            user = pwd.getpwuid(
+                os.getuid()
+            ).pw_name
+
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        refuse(
+            "DPL1.INSTALL.SERVICE_USER_INVALID",
+            user=user,
+        )
+
+    group = requested_group
+
+    if not group:
+
+        group = grp.getgrgid(
+            pw.pw_gid
+        ).gr_name
+
+    try:
+        gr = grp.getgrnam(group)
+    except KeyError:
+        refuse(
+            "DPL1.INSTALL.SERVICE_GROUP_INVALID",
+            group=group,
+        )
+
+    return (
+        user,
+        group,
+        pw.pw_uid,
+        gr.gr_gid,
+    )
+
+
+def command_path(
+    name: str,
+) -> str:
+
+    value = shutil.which(
+        name
+    )
+
+    if value is None:
+        refuse(
+            "DPL1.INSTALL.DEPENDENCY_MISSING",
+            dependency=name,
+        )
+
+    return value
+
+
+def run(
+    argv: list[str],
+    *,
+    service_user: str | None = None,
+    service_group: str | None = None,
+    service_uid: int | None = None,
+) -> str:
+
+    actual = list(argv)
+
+    if service_user is not None:
+
+        if service_uid is None:
+            refuse(
+                "DPL1.INSTALL.INTERNAL_IDENTITY_ERROR"
+            )
+
+        if os.geteuid() == 0:
+
+            actual = [
+                command_path("runuser"),
+                "-u",
+                service_user,
+            ]
+
+            if service_group:
+
+                actual.extend(
+                    [
+                        "-g",
+                        service_group,
+                    ]
+                )
+
+            actual.extend(
+                [
+                    "--",
+                    *argv,
+                ]
+            )
+
+        elif os.geteuid() != service_uid:
+
+            refuse(
+                "DPL1.INSTALL.CANNOT_SWITCH_SERVICE_USER",
+                user=service_user,
+            )
+
+    env = dict(
+        os.environ
+    )
+
+    env.update(
+        {
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PATH":
+                "/usr/sbin:/usr/bin:/sbin:/bin",
+        }
+    )
+
+    proc = subprocess.run(
+        actual,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        check=False,
+    )
+
+    if proc.returncode != 0:
+
+        refuse(
+            "DPL1.INSTALL.COMMAND_FAILED",
+
+            command=argv[0],
+
+            returncode=
+                proc.returncode,
+
+            stderr=
+                proc.stderr[-4000:],
+        )
+
+    return proc.stdout
+
+
+def validate_timezone(
+    value: str,
+) -> str:
+
+    if value == "UTC":
+        return value
+
+    p = Path(value)
+
+    if (
+        p.is_absolute()
+        or ".." in p.parts
+    ):
+        refuse(
+            "DPL1.INSTALL.TIMEZONE_INVALID",
+            timezone=value,
+        )
+
+    if not (
+        Path("/usr/share/zoneinfo")
+        / p
+    ).is_file():
+
+        refuse(
+            "DPL1.INSTALL.TIMEZONE_INVALID",
+            timezone=value,
+        )
+
+    return value
+
+
+def validate_source_package(
+    source: Path,
+) -> None:
+
+    if not source.is_dir():
+
+        refuse(
+            "DPL1.INSTALL.SOURCE_PACKAGE_INVALID",
+            package=str(source),
+        )
+
+    for path in source.rglob("*"):
+
+        if path.is_symlink():
+
+            refuse(
+                "DPL1.INSTALL.PACKAGE_SYMLINK_FOUND",
+                path=str(
+                    path.relative_to(
+                        source
+                    )
+                ),
+            )
+
+    preflight = (
+        source
+        / "bin"
+        / "preflight-ia-security-agent"
+    )
+
+    if not preflight.is_file():
+
+        refuse(
+            "DPL1.INSTALL.SOURCE_PACKAGE_INVALID",
+            error="preflight missing",
+        )
+
+    output = run(
+        [
+            str(preflight)
+        ]
+    )
+
+    try:
+        result = json.loads(
+            output
+        )
+    except Exception:
+
+        refuse(
+            "DPL1.INSTALL.PREFLIGHT_INVALID_OUTPUT"
+        )
+
+    if result.get("status") != "VALID":
+
+        refuse(
+            "DPL1.INSTALL.PREFLIGHT_FAILED"
+        )
+
+
+def ensure_free_space(
+    path: Path,
+    *,
+    minimum_bytes: int = 100 * 1024 * 1024,
+) -> None:
+
+    usage = shutil.disk_usage(
+        path
+    )
+
+    if usage.free < minimum_bytes:
+
+        refuse(
+            "DPL1.INSTALL.DISK_SPACE_INSUFFICIENT",
+
+            path=str(path),
+
+            free_bytes=
+                usage.free,
+
+            required_bytes=
+                minimum_bytes,
+        )
+
+
+def normalize_control_permissions(
+    root: Path,
+    *,
+    service_gid: int,
+) -> None:
+
+    owner_uid = (
+        0
+        if os.geteuid() == 0
+        else os.geteuid()
+    )
+
+    for path in [
+        root,
+        *root.rglob("*"),
+    ]:
+
+        if path.is_symlink():
+
+            refuse(
+                "DPL1.INSTALL.PACKAGE_SYMLINK_FOUND",
+                path=str(path),
+            )
+
+        if path.is_dir():
+
+            os.chmod(
+                path,
+                0o750,
+            )
+
+        elif path.is_file():
+
+            original = (
+                path.stat().st_mode
+                & 0o111
+            )
+
+            os.chmod(
+                path,
+                (
+                    0o750
+                    if original
+                    else
+                    0o640
+                ),
+            )
+
+        if os.geteuid() == 0:
+
+            os.chown(
+                path,
+                owner_uid,
+                service_gid,
+            )
+
+
+def normalize_runtime_permissions(
+    root: Path,
+    *,
+    uid: int,
+    gid: int,
+) -> None:
+
+    for path in [
+        root,
+        *root.rglob("*"),
+    ]:
+
+        if os.geteuid() == 0:
+
+            os.chown(
+                path,
+                uid,
+                gid,
+            )
+
+
+def validate_initial_state(
+    runtime: Path,
+    hostname: str,
+) -> dict[str, Any]:
+
+    baseline = (
+        runtime
+        / "baseline"
+        / "baseline-v1.json"
+    )
+
+    head_path = (
+        runtime
+        / "state"
+        / "HEAD.json"
+    )
+
+    if (
+        not baseline.is_file()
+        or not head_path.is_file()
+    ):
+        refuse(
+            "DPL1.INSTALL.INITIAL_VALIDATION_FAILED",
+            error="baseline or HEAD missing",
+        )
+
+    if (
+        baseline.stat().st_mode
+        & 0o777
+    ) != 0o440:
+
+        refuse(
+            "DPL1.INSTALL.BASELINE_MODE_INVALID",
+
+            observed=
+                oct(
+                    baseline.stat().st_mode
+                    & 0o777
+                ),
+        )
+
+    head = json.loads(
+        head_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    current = head.get(
+        "current",
+        {}
+    )
+
+    if (
+        current.get(
+            "security_resolution"
+        )
+        != "NOT_ASSERTED"
+    ):
+
+        refuse(
+            "DPL1.INSTALL.RESOLUTION_POLICY_INVALID"
+        )
+
+    observation_rel = (
+        current.get(
+            "observation"
+        )
+    )
+
+    if not isinstance(
+        observation_rel,
+        str,
+    ):
+
+        refuse(
+            "DPL1.INSTALL.INITIAL_VALIDATION_FAILED",
+            error="observation reference missing",
+        )
+
+    observation = json.loads(
+        (
+            runtime
+            / observation_rel
+        ).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    payload = observation.get(
+        "payload",
+        {}
+    )
+
+    observed_hostname = (
+        payload
+        .get("identity", {})
+        .get("hostname")
+    )
+
+    if observed_hostname != hostname:
+
+        refuse(
+            "DPL1.INSTALL.HOST_IDENTITY_MISMATCH",
+
+            expected=
+                hostname,
+
+            observed=
+                observed_hostname,
+        )
+
+    coverage = {
+        "packages":
+            payload
+            .get("packages", {})
+            .get("status"),
+
+        "services.unit_files":
+            payload
+            .get("services", {})
+            .get(
+                "unit_files_status"
+            ),
+
+        "services.running":
+            payload
+            .get("services", {})
+            .get(
+                "running_status"
+            ),
+
+        "network.interfaces":
+            payload
+            .get("network", {})
+            .get(
+                "interfaces_status"
+            ),
+
+        "network.listeners":
+            payload
+            .get("network", {})
+            .get(
+                "listeners_status"
+            ),
+
+        "mounts":
+            payload
+            .get("mounts", {})
+            .get("status"),
+    }
+
+    bad = {
+        key: value
+        for key, value
+        in coverage.items()
+        if value != "OK"
+    }
+
+    if bad:
+
+        refuse(
+            "DPL1.INSTALL.POSITIVE_EVIDENCE_INCOMPLETE",
+            coverage=bad,
+        )
+
+    return {
+        "baseline_sha256":
+            sha256_file(
+                baseline
+            ),
+
+        "head_sha256":
+            sha256_file(
+                head_path
+            ),
+
+        "run_id":
+            current.get(
+                "run_id"
+            ),
+
+        "commit_sha256":
+            current.get(
+                "commit_sha256"
+            ),
+    }
+
+
+def discover_ollama(
+    endpoint: str,
+    model: str,
+) -> tuple[
+    str,
+    str,
+]:
+
+    parsed = urllib.parse.urlparse(
+        endpoint
+    )
+
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname
+        not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }
+        or parsed.port is None
+    ):
+
+        refuse(
+            "DPL1.LLM.CONFIG_INVALID",
+            error="loopback Ollama endpoint required",
+        )
+
+    base = endpoint.rstrip(
+        "/"
+    )
+
+    def get_json(
+        suffix: str,
+    ) -> dict[str, Any]:
+
+        try:
+
+            with urllib.request.urlopen(
+                base + suffix,
+                timeout=15,
+            ) as response:
+
+                obj = json.loads(
+                    response.read()
+                    .decode("utf-8")
+                )
+
+        except Exception as exc:
+
+            refuse(
+                "DPL1.LLM.PROVIDER_UNAVAILABLE",
+                error=type(exc).__name__,
+            )
+
+        if not isinstance(
+            obj,
+            dict,
+        ):
+            refuse(
+                "DPL1.LLM.PROVIDER_UNAVAILABLE",
+                error="invalid JSON root",
+            )
+
+        return obj
+
+    version_obj = get_json(
+        "/api/version"
+    )
+
+    version = version_obj.get(
+        "version"
+    )
+
+    if (
+        not isinstance(
+            version,
+            str,
+        )
+        or not version
+    ):
+
+        refuse(
+            "DPL1.LLM.PROVIDER_VERSION_MISMATCH",
+            error="provider version missing",
+        )
+
+    tags = get_json(
+        "/api/tags"
+    )
+
+    models = tags.get(
+        "models"
+    )
+
+    if not isinstance(
+        models,
+        list,
+    ):
+
+        refuse(
+            "DPL1.LLM.MODEL_MISSING",
+            model=model,
+        )
+
+    digest = None
+
+    for item in models:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        if (
+            item.get("name") == model
+            or item.get("model") == model
+        ):
+
+            digest = item.get(
+                "digest"
+            )
+
+            break
+
+    if not isinstance(
+        digest,
+        str,
+    ):
+
+        refuse(
+            "DPL1.LLM.MODEL_MISSING",
+            model=model,
+        )
+
+    if digest.startswith(
+        "sha256:"
+    ):
+
+        digest = digest[
+            len("sha256:"):
+        ]
+
+    if not re.fullmatch(
+        r"[0-9a-f]{64}",
+        digest,
+    ):
+
+        refuse(
+            "DPL1.LLM.MODEL_DIGEST_MISMATCH",
+            digest=digest,
+        )
+
+    return (
+        version,
+        digest,
+    )
+
+
+def install_unit(
+    source: Path,
+    target: Path,
+) -> None:
+
+    if target.exists():
+
+        refuse(
+            "DPL1.INSTALL.SYSTEMD_CONFLICT",
+            unit=str(target),
+        )
+
+    data = source.read_bytes()
+
+    fd = os.open(
+        target,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL,
+        0o644,
+    )
+
+    with os.fdopen(
+        fd,
+        "wb",
+    ) as f:
+
+        f.write(data)
+        f.flush()
+        os.fsync(
+            f.fileno()
+        )
+
+    os.chmod(
+        target,
+        0o644,
+    )
+
+    if os.geteuid() == 0:
+
+        os.chown(
+            target,
+            0,
+            0,
+        )
+
+
+def materialize_refusal(
+    attempt: Path | None,
+    failures: Path | None,
+    attempt_id: str,
+    code: str,
+    details: dict[str, Any],
+) -> str | None:
+
+    if (
+        attempt is None
+        or failures is None
+    ):
+        return None
+
+    try:
+
+        refusal = {
+            "schema":
+                "ia-security-agent-install-refusal-v1",
+
+            "stage":
+                "INSTALL",
+
+            "status":
+                "REFUSED",
+
+            "reason_code":
+                code,
+
+            "attempt_id":
+                attempt_id,
+
+            "timestamp":
+                utc_now(),
+
+            "same_attempt_retry_allowed":
+                False,
+
+            "append_only":
+                True,
+
+            "partial_materialization_preserved":
+                True,
+
+            "details":
+                details,
+        }
+
+        exclusive_json(
+            attempt
+            / "REFUSED.json",
+            refusal,
+        )
+
+        target = (
+            failures
+            / attempt_id
+        )
+
+        os.rename(
+            attempt,
+            target,
+        )
+
+        return str(
+            target
+            / "REFUSED.json"
+        )
+
+    except Exception:
+
+        return None
+
+
+def main() -> int:
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Install IA Security Agent "
+            "Deployment V1"
+        )
+    )
+
+    parser.add_argument(
+        "--runtime-root",
+        default=
+            "/data/ia-local/security-audit",
+    )
+
+    parser.add_argument(
+        "--control-root",
+        default=
+            "/opt/ia-security-agent/v1",
+    )
+
+    parser.add_argument(
+        "--unit-dir",
+        default=
+            "/etc/systemd/system",
+    )
+
+    parser.add_argument(
+        "--installer-state-root",
+        default=
+            "/var/lib/ia-security-agent-installer",
+    )
+
+    parser.add_argument(
+        "--service-user",
+    )
+
+    parser.add_argument(
+        "--service-group",
+    )
+
+    parser.add_argument(
+        "--timezone",
+        default=
+            default_timezone(),
+    )
+
+    parser.add_argument(
+        "--core-schedule",
+        default=
+            "hourly",
+    )
+
+    parser.add_argument(
+        "--randomized-delay-sec",
+        default=
+            "5min",
+    )
+
+    parser.add_argument(
+        "--enable-nightly-llm",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--llm-endpoint",
+        default=
+            "http://127.0.0.1:11434",
+    )
+
+    parser.add_argument(
+        "--llm-model",
+        default=
+            "qwen3:4b-instruct",
+    )
+
+    parser.add_argument(
+        "--llm-time",
+        default=
+            "03:00:00",
+    )
+
+    parser.add_argument(
+        "--simulation-root",
+        help=(
+            "D12/test only: redirect "
+            "control/runtime/systemd/state "
+            "below an isolated /tmp root."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    source = (
+        Path(__file__)
+        .resolve()
+        .parent
+    )
+
+    simulation = (
+        args.simulation_root
+        is not None
+    )
+
+    if simulation:
+
+        sim = safe_absolute(
+            "simulation_root",
+            args.simulation_root,
+        )
+
+        tmp = Path(
+            "/tmp"
+        ).resolve()
+
+        if (
+            sim == tmp
+            or tmp not in sim.parents
+        ):
+
+            emit(
+                status="REFUSED",
+                reason_code=
+                    "DPL1.INSTALL.SIMULATION_ROOT_INVALID",
+                details={
+                    "simulation_root":
+                        str(sim),
+                },
+            )
+
+            return EXIT_REFUSED
+
+        sim.mkdir(
+            parents=True,
+            exist_ok=True,
+            mode=0o750,
+        )
+
+        control_root = (
+            sim
+            / "opt"
+            / "ia-security-agent"
+            / "v1"
+        )
+
+        runtime_root = (
+            sim
+            / "data"
+            / "ia-local"
+            / "security-audit"
+        )
+
+        unit_dir = (
+            sim
+            / "etc"
+            / "systemd"
+            / "system"
+        )
+
+        state_root = (
+            sim
+            / "var"
+            / "lib"
+            / "ia-security-agent-installer"
+        )
+
+        (
+            runtime_root.parent
+        ).mkdir(
+            parents=True,
+            exist_ok=True,
+            mode=0o750,
+        )
+
+        unit_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+            mode=0o750,
+        )
+
+        state_root.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+            mode=0o750,
+        )
+
+    else:
+
+        if os.geteuid() != 0:
+
+            emit(
+                status="REFUSED",
+                reason_code=
+                    "DPL1.INSTALL.ROOT_REQUIRED",
+                details={
+                    "hint":
+                        "run with sudo",
+                },
+            )
+
+            return EXIT_REFUSED
+
+        control_root = safe_absolute(
+            "control_root",
+            args.control_root,
+        )
+
+        runtime_root = safe_absolute(
+            "runtime_root",
+            args.runtime_root,
+        )
+
+        unit_dir = safe_absolute(
+            "unit_dir",
+            args.unit_dir,
+        )
+
+        state_root = safe_absolute(
+            "installer_state_root",
+            args.installer_state_root,
+        )
+
+        if not runtime_root.parent.is_dir():
+
+            emit(
+                status="REFUSED",
+                reason_code=
+                    "DPL1.INSTALL.RUNTIME_PARENT_MISSING",
+                details={
+                    "required_parent":
+                        str(
+                            runtime_root.parent
+                        ),
+                },
+            )
+
+            return EXIT_REFUSED
+
+    attempt_id = (
+        datetime.now(
+            timezone.utc
+        )
+        .strftime(
+            "%Y%m%dT%H%M%S%fZ"
+        )
+        + "-"
+        + uuid.uuid4().hex[:8]
+    )
+
+    attempt = None
+    failures = None
+
+    try:
+
+        if sys.version_info < (
+            3,
+            10,
+        ):
+
+            refuse(
+                "DPL1.HOST.PYTHON_VERSION_UNSUPPORTED",
+
+                observed=
+                    platform.python_version(),
+
+                required=
+                    ">=3.10",
+            )
+
+        for name in (
+            REQUIRED_COMMANDS
+        ):
+            command_path(
+                name
+            )
+
+        (
+            service_user,
+            service_group,
+            service_uid,
+            service_gid,
+        ) = resolve_identity(
+            args.service_user,
+            args.service_group,
+        )
+
+        timezone_name = (
+            validate_timezone(
+                args.timezone
+            )
+        )
+
+        # Installer evidence root.
+        attempts = (
+            state_root
+            / "attempts"
+        )
+
+        failures = (
+            state_root
+            / "failures"
+        )
+
+        runs = (
+            state_root
+            / "runs"
+        )
+
+        for p in (
+            attempts,
+            failures,
+            runs,
+        ):
+
+            p.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o750,
+            )
+
+        attempt = (
+            attempts
+            / attempt_id
+        )
+
+        attempt.mkdir(
+            mode=0o750,
+        )
+
+        exclusive_json(
+            attempt
+            / "INPUT.json",
+            {
+                "schema":
+                    "ia-security-agent-install-input-v1",
+
+                "attempt_id":
+                    attempt_id,
+
+                "created_at":
+                    utc_now(),
+
+                "simulation":
+                    simulation,
+
+                "source_package":
+                    str(source),
+
+                "control_root":
+                    str(control_root),
+
+                "runtime_root":
+                    str(runtime_root),
+
+                "unit_dir":
+                    str(unit_dir),
+
+                "service_user":
+                    service_user,
+
+                "service_group":
+                    service_group,
+
+                "timezone":
+                    timezone_name,
+
+                "core_schedule":
+                    args.core_schedule,
+
+                "nightly_llm_enabled":
+                    args.enable_nightly_llm,
+            },
+        )
+
+        validate_source_package(
+            source
+        )
+
+        if (
+            control_root == runtime_root
+            or control_root
+            in runtime_root.parents
+            or runtime_root
+            in control_root.parents
+        ):
+
+            refuse(
+                "DPL1.INSTALL.PATH_COLLISION",
+
+                control_root=
+                    str(control_root),
+
+                runtime_root=
+                    str(runtime_root),
+            )
+
+        if control_root.exists():
+
+            refuse(
+                "DPL1.INSTALL.EXISTING_CONTROL_ROOT",
+                path=str(control_root),
+            )
+
+        if runtime_root.exists():
+
+            refuse(
+                "DPL1.INSTALL.EXISTING_RUNTIME_ROOT",
+                path=str(runtime_root),
+            )
+
+        for unit in (
+            CORE_SERVICE,
+            CORE_TIMER,
+            LLM_SERVICE,
+            LLM_TIMER,
+        ):
+
+            if (
+                unit_dir
+                / unit
+            ).exists():
+
+                refuse(
+                    "DPL1.INSTALL.SYSTEMD_CONFLICT",
+                    unit=unit,
+                )
+
+        # --------------------------------------------------------
+        # Stable control-plane installation.
+        # --------------------------------------------------------
+
+        control_root.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+            mode=0o755,
+        )
+
+        ensure_free_space(
+            control_root.parent
+        )
+
+        ensure_free_space(
+            runtime_root.parent
+        )
+
+        control_stage = (
+            control_root.parent
+            / (
+                "."
+                + control_root.name
+                + ".install-"
+                + attempt_id
+            )
+        )
+
+        shutil.copytree(
+            source,
+            control_stage,
+            copy_function=
+                shutil.copy2,
+        )
+
+        normalize_control_permissions(
+            control_stage,
+            service_gid=
+                service_gid,
+        )
+
+        run(
+            [
+                str(
+                    control_stage
+                    / "bin"
+                    / "preflight-ia-security-agent"
+                )
+            ]
+        )
+
+        os.rename(
+            control_stage,
+            control_root,
+        )
+
+        manifest_sha = (
+            sha256_file(
+                control_root
+                / "DEPLOYMENT-MANIFEST.json"
+            )
+        )
+
+        # --------------------------------------------------------
+        # Fresh target bootstrap.
+        # --------------------------------------------------------
+
+        bootstrap_command = [
+            str(
+                control_root
+                / "bin"
+                / "bootstrap-ia-security-agent"
+            ),
+
+            "--target-root",
+            str(runtime_root),
+
+            "--service-user",
+            service_user,
+
+            "--service-group",
+            service_group,
+
+            "--python-bin",
+            command_path(
+                "python3"
+            ),
+
+            "--timezone",
+            timezone_name,
+
+            "--control-manifest-sha256",
+            manifest_sha,
+
+            "--hostname",
+            socket.gethostname(),
+        ]
+
+        if args.enable_nightly_llm:
+
+            bootstrap_command.append(
+                "--enable-nightly-llm"
+            )
+
+        run(
+            bootstrap_command
+        )
+
+        normalize_runtime_permissions(
+            runtime_root,
+            uid=service_uid,
+            gid=service_gid,
+        )
+
+        instance_config = (
+            runtime_root
+            / "config"
+            / "instance-config-v1.json"
+        )
+
+        # --------------------------------------------------------
+        # Initial deterministic validation cycle.
+        # --------------------------------------------------------
+
+        cycle_output = run(
+            [
+                str(
+                    control_root
+                    / "bin"
+                    / "ia-security-agent-cycle"
+                ),
+
+                "--instance-config",
+                str(
+                    instance_config
+                ),
+            ],
+            service_user=
+                service_user,
+            service_group=
+                service_group,
+            service_uid=
+                service_uid,
+        )
+
+        try:
+
+            cycle_result = (
+                json.loads(
+                    cycle_output
+                )
+            )
+
+        except Exception:
+
+            refuse(
+                "DPL1.INSTALL.INITIAL_CYCLE_OUTPUT_INVALID"
+            )
+
+        if (
+            cycle_result.get(
+                "status"
+            )
+            != "VALID"
+        ):
+
+            refuse(
+                "DPL1.INSTALL.INITIAL_CYCLE_FAILED"
+            )
+
+        initial_state = (
+            validate_initial_state(
+                runtime_root,
+                socket.gethostname(),
+            )
+        )
+
+        # --------------------------------------------------------
+        # Optional local Nightly LLM.
+        # --------------------------------------------------------
+
+        llm_config = None
+
+        if args.enable_nightly_llm:
+
+            if not re.fullmatch(
+                r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d",
+                args.llm_time,
+            ):
+
+                refuse(
+                    "DPL1.LLM.CONFIG_INVALID",
+                    error="invalid llm-time",
+                )
+
+            (
+                provider_version,
+                model_digest,
+            ) = discover_ollama(
+                args.llm_endpoint,
+                args.llm_model,
+            )
+
+            llm_config = (
+                runtime_root
+                / "config"
+                / "nightly-llm-v1.json"
+            )
+
+            exclusive_json(
+                llm_config,
+                {
+                    "schema":
+                        "ia-security-agent-nightly-llm-config-v1",
+
+                    "enabled":
+                        True,
+
+                    "provider":
+                        "ollama",
+
+                    "endpoint":
+                        args.llm_endpoint,
+
+                    "provider_version":
+                        provider_version,
+
+                    "model":
+                        args.llm_model,
+
+                    "model_digest":
+                        model_digest,
+
+                    "authority":
+                        "NON_FACTUAL_CONSUMER",
+
+                    "input_relative_path":
+                        "state/HEAD.json",
+
+                    "schedule": {
+                        "time":
+                            args.llm_time,
+
+                        "timezone":
+                            timezone_name,
+                    },
+                },
+            )
+
+            os.chmod(
+                llm_config,
+                0o640,
+            )
+
+            if os.geteuid() == 0:
+
+                os.chown(
+                    llm_config,
+                    service_uid,
+                    service_gid,
+                )
+
+            run(
+                [
+                    str(
+                        control_root
+                        / "bin"
+                        / "nightly-llm-ia-security-agent"
+                    ),
+
+                    "--instance-config",
+                    str(
+                        instance_config
+                    ),
+
+                    "--llm-config",
+                    str(
+                        llm_config
+                    ),
+
+                    "--validate-only",
+                ],
+                service_user=
+                    service_user,
+                service_group=
+                    service_group,
+                service_uid=
+                    service_uid,
+            )
+
+        # --------------------------------------------------------
+        # Render and validate systemd.
+        # --------------------------------------------------------
+
+        rendered_core = (
+            attempt
+            / "rendered-core"
+        )
+
+        run(
+            [
+                str(
+                    control_root
+                    / "bin"
+                    / "render-ia-security-systemd"
+                ),
+
+                "--instance-config",
+                str(
+                    instance_config
+                ),
+
+                "--output-dir",
+                str(
+                    rendered_core
+                ),
+
+                "--on-calendar",
+                args.core_schedule,
+
+                "--randomized-delay-sec",
+                args.randomized_delay_sec,
+            ]
+        )
+
+        verify_units = [
+            str(
+                rendered_core
+                / CORE_SERVICE
+            ),
+            str(
+                rendered_core
+                / CORE_TIMER
+            ),
+        ]
+
+        rendered_llm = None
+
+        if args.enable_nightly_llm:
+
+            rendered_llm = (
+                attempt
+                / "rendered-llm"
+            )
+
+            run(
+                [
+                    str(
+                        control_root
+                        / "bin"
+                        / "render-nightly-llm-systemd"
+                    ),
+
+                    "--instance-config",
+                    str(
+                        instance_config
+                    ),
+
+                    "--llm-config",
+                    str(
+                        llm_config
+                    ),
+
+                    "--output-dir",
+                    str(
+                        rendered_llm
+                    ),
+                ]
+            )
+
+            verify_units.extend(
+                [
+                    str(
+                        rendered_llm
+                        / LLM_SERVICE
+                    ),
+                    str(
+                        rendered_llm
+                        / LLM_TIMER
+                    ),
+                ]
+            )
+
+        run(
+            [
+                command_path(
+                    "systemd-analyze"
+                ),
+                "verify",
+                *verify_units,
+            ]
+        )
+
+        # --------------------------------------------------------
+        # Install unit files.
+        # --------------------------------------------------------
+
+        unit_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+            mode=0o755,
+        )
+
+        install_unit(
+            rendered_core
+            / CORE_SERVICE,
+
+            unit_dir
+            / CORE_SERVICE,
+        )
+
+        install_unit(
+            rendered_core
+            / CORE_TIMER,
+
+            unit_dir
+            / CORE_TIMER,
+        )
+
+        if rendered_llm is not None:
+
+            install_unit(
+                rendered_llm
+                / LLM_SERVICE,
+
+                unit_dir
+                / LLM_SERVICE,
+            )
+
+            install_unit(
+                rendered_llm
+                / LLM_TIMER,
+
+                unit_dir
+                / LLM_TIMER,
+            )
+
+        # --------------------------------------------------------
+        # Real activation. Simulation never touches live systemd.
+        # --------------------------------------------------------
+
+        activated = False
+
+        if not simulation:
+
+            run(
+                [
+                    command_path(
+                        "systemctl"
+                    ),
+                    "daemon-reload",
+                ]
+            )
+
+            run(
+                [
+                    command_path(
+                        "systemctl"
+                    ),
+                    "enable",
+                    "--now",
+                    CORE_TIMER,
+                ]
+            )
+
+            if args.enable_nightly_llm:
+
+                run(
+                    [
+                        command_path(
+                            "systemctl"
+                        ),
+                        "enable",
+                        "--now",
+                        LLM_TIMER,
+                    ]
+                )
+
+            enabled = run(
+                [
+                    command_path(
+                        "systemctl"
+                    ),
+                    "is-enabled",
+                    CORE_TIMER,
+                ]
+            ).strip()
+
+            active = run(
+                [
+                    command_path(
+                        "systemctl"
+                    ),
+                    "is-active",
+                    CORE_TIMER,
+                ]
+            ).strip()
+
+            if (
+                enabled != "enabled"
+                or active != "active"
+            ):
+
+                refuse(
+                    "DPL1.ACTIVATION.FINAL_VALIDATION_FAILED",
+
+                    enabled=
+                        enabled,
+
+                    active=
+                        active,
+                )
+
+            if args.enable_nightly_llm:
+
+                llm_enabled = run(
+                    [
+                        command_path(
+                            "systemctl"
+                        ),
+                        "is-enabled",
+                        LLM_TIMER,
+                    ]
+                ).strip()
+
+                llm_active = run(
+                    [
+                        command_path(
+                            "systemctl"
+                        ),
+                        "is-active",
+                        LLM_TIMER,
+                    ]
+                ).strip()
+
+                if (
+                    llm_enabled
+                    != "enabled"
+                    or llm_active
+                    != "active"
+                ):
+
+                    refuse(
+                        "DPL1.ACTIVATION.FINAL_VALIDATION_FAILED",
+
+                        llm_enabled=
+                            llm_enabled,
+
+                        llm_active=
+                            llm_active,
+                    )
+
+            activated = True
+
+        # --------------------------------------------------------
+        # Commit installer result.
+        # --------------------------------------------------------
+
+        instance = json.loads(
+            instance_config.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        result = {
+            "schema":
+                "ia-security-agent-install-result-v1",
+
+            "status":
+                "ACTIVE_CONFIRMED"
+                if activated
+                else
+                "VALID_SIMULATION",
+
+            "attempt_id":
+                attempt_id,
+
+            "completed_at":
+                utc_now(),
+
+            "simulation":
+                simulation,
+
+            "control_root":
+                str(
+                    control_root
+                ),
+
+            "runtime_root":
+                str(
+                    runtime_root
+                ),
+
+            "unit_dir":
+                str(
+                    unit_dir
+                ),
+
+            "service_user":
+                service_user,
+
+            "service_group":
+                service_group,
+
+            "instance_id":
+                instance[
+                    "identity"
+                ][
+                    "instance_id"
+                ],
+
+            "installation_id":
+                instance[
+                    "identity"
+                ][
+                    "installation_id"
+                ],
+
+            "control_manifest_sha256":
+                manifest_sha,
+
+            "initial_state":
+                initial_state,
+
+            "core_timer_activated":
+                activated,
+
+            "nightly_llm_enabled":
+                args.enable_nightly_llm,
+
+            "nightly_llm_authority":
+                (
+                    "NON_FACTUAL_CONSUMER"
+                    if args.enable_nightly_llm
+                    else
+                    "NOT_APPLICABLE"
+                ),
+
+            "automatic_remediation":
+                False,
+
+            "automatic_risk_acceptance":
+                False,
+
+            "automatic_deferral":
+                False,
+        }
+
+        exclusive_json(
+            attempt
+            / "RESULT.json",
+            result,
+        )
+
+        committed_attempt = (
+            runs
+            / attempt_id
+        )
+
+        os.rename(
+            attempt,
+            committed_attempt,
+        )
+
+        emit(
+            status="VALID",
+            reason_code=None,
+            details={
+                **result,
+
+                "installer_evidence":
+                    str(
+                        committed_attempt
+                        / "RESULT.json"
+                    ),
+            },
+        )
+
+        return EXIT_VALID
+
+    except InstallRefused as exc:
+
+        evidence = (
+            materialize_refusal(
+                attempt,
+                failures,
+                attempt_id,
+                exc.code,
+                exc.details,
+            )
+        )
+
+        emit(
+            status="REFUSED",
+            reason_code=exc.code,
+            details={
+                **exc.details,
+
+                "attempt_id":
+                    attempt_id,
+
+                "same_attempt_retry_allowed":
+                    False,
+
+                "failure_evidence":
+                    evidence,
+            },
+        )
+
+        return EXIT_REFUSED
+
+    except Exception as exc:
+
+        details = {
+            "error_type":
+                type(exc).__name__,
+
+            "attempt_id":
+                attempt_id,
+        }
+
+        evidence = (
+            materialize_refusal(
+                attempt,
+                failures,
+                attempt_id,
+                "DPL1.INSTALL.UNEXPECTED_FAILURE",
+                details,
+            )
+        )
+
+        emit(
+            status="REFUSED",
+            reason_code=
+                "DPL1.INSTALL.UNEXPECTED_FAILURE",
+            details={
+                **details,
+
+                "same_attempt_retry_allowed":
+                    False,
+
+                "failure_evidence":
+                    evidence,
+            },
+        )
+
+        return EXIT_REFUSED
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        main()
+    )

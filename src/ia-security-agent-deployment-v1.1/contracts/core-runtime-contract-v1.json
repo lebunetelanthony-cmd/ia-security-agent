@@ -1,0 +1,37 @@
+{
+  "schema": "ia-security-agent-core-runtime-contract-v1",
+  "deployment_version": "1",
+
+  "role": "LONGITUDINAL_DETERMINISTIC_HOST_MONITOR",
+
+  "authority": "DETERMINISTIC",
+
+  "baseline_policy": {
+    "created_from_target_only": true,
+    "created_on_first_successful_cycle": true,
+    "modified_after_creation": false
+  },
+
+  "cycle_policy": {
+    "append_only_run_bundle": true,
+    "head_updated_last": true,
+    "resolution_from_absence": false,
+    "automatic_remediation": false,
+    "automatic_risk_acceptance": false,
+    "automatic_deferral": false
+  },
+
+  "change_policy": {
+    "change_is_not_automatically_a_vulnerability": true,
+    "security_resolution": "NOT_ASSERTED",
+    "unknown_remains_unknown": true
+  },
+
+  "llm_authority": "NONE",
+
+  "failure_policy": {
+    "fail_closed": true,
+    "preserve_failure_evidence": true,
+    "committed_run_rollback_allowed": false
+  }
+}

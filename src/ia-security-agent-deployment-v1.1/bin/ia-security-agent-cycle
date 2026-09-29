@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import uuid
+
+from pathlib import Path
+from typing import Any
+
+
+RESULT_SCHEMA = "ia-security-agent-stage-result-v1"
+INSTANCE_SCHEMA = "ia-security-agent-instance-config-v1"
+
+EXIT_VALID = 0
+EXIT_REFUSED = 20
+
+RUNTIME_DIRS = [
+    "baseline",
+    "history/raw",
+    "history/meta",
+    "history/diff",
+    "history/impact",
+    "state",
+    "reports",
+    "runs",
+    "attempts",
+    "failures",
+    "commits",
+    "locks",
+]
+
+
+def emit(
+    status: str,
+    reason_code: str | None,
+    details: dict[str, Any],
+) -> None:
+
+    obj = {
+        "schema": RESULT_SCHEMA,
+        "stage": "RUNTIME",
+        "status": status,
+        "reason_code": reason_code,
+        "next_stage_authorized": (
+            status == "VALID"
+        ),
+        "details": details,
+    }
+
+    print(
+        json.dumps(
+            obj,
+            sort_keys=True,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
+def refuse(
+    code: str,
+    details: dict[str, Any],
+) -> "NoReturn":
+
+    emit(
+        "REFUSED",
+        code,
+        details,
+    )
+
+    raise SystemExit(EXIT_REFUSED)
+
+
+def valid_uuid(value: Any) -> bool:
+
+    if not isinstance(value, str):
+        return False
+
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return False
+
+
+def load_and_validate_instance(
+    config_path: Path,
+) -> tuple[dict[str, Any], Path]:
+
+    if not config_path.is_absolute():
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "instance config path must be absolute"
+            },
+        )
+
+    if not config_path.is_file():
+        refuse(
+            "DPL1.RUNTIME.CONFIG_MISSING",
+            {
+                "instance_config":
+                    str(config_path)
+            },
+        )
+
+    try:
+        data = json.loads(
+            config_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as exc:
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    type(exc).__name__
+            },
+        )
+
+    if not isinstance(data, dict):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "config root is not an object"
+            },
+        )
+
+    if data.get("schema") != INSTANCE_SCHEMA:
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "instance schema mismatch"
+            },
+        )
+
+    identity = data.get("identity")
+
+    if not isinstance(identity, dict):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "identity missing"
+            },
+        )
+
+    if not valid_uuid(
+        identity.get("instance_id")
+    ):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "invalid instance_id"
+            },
+        )
+
+    if not valid_uuid(
+        identity.get("installation_id")
+    ):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "invalid installation_id"
+            },
+        )
+
+    filesystem = data.get("filesystem")
+
+    if not isinstance(filesystem, dict):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "filesystem config missing"
+            },
+        )
+
+    runtime_value = filesystem.get(
+        "runtime_root"
+    )
+
+    if not isinstance(
+        runtime_value,
+        str,
+    ):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "runtime_root invalid"
+            },
+        )
+
+    runtime_root = Path(runtime_value)
+
+    if not runtime_root.is_absolute():
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "runtime_root not absolute"
+            },
+        )
+
+    runtime_root = runtime_root.resolve()
+
+    expected_config = (
+        runtime_root
+        / "config"
+        / "instance-config-v1.json"
+    ).resolve()
+
+    if expected_config != config_path.resolve():
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "config/runtime binding mismatch",
+                "expected":
+                    str(expected_config),
+                "observed":
+                    str(config_path.resolve()),
+            },
+        )
+
+    for rel in RUNTIME_DIRS:
+
+        candidate = runtime_root / rel
+
+        if not candidate.is_dir():
+            refuse(
+                "DPL1.RUNTIME.RUNTIME_TREE_INVALID",
+                {
+                    "missing":
+                        str(candidate)
+                },
+            )
+
+    return data, runtime_root
+
+
+def main() -> int:
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "IA Security Agent Deployment V1 "
+            "runtime gate"
+        )
+    )
+
+    parser.add_argument(
+        "--instance-config",
+        type=Path,
+        required=True,
+    )
+
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+    )
+
+    args = parser.parse_args()
+
+    config, runtime_root = (
+        load_and_validate_instance(
+            args.instance_config
+        )
+    )
+
+    package_root = (
+        Path(__file__)
+        .resolve()
+        .parents[1]
+    )
+
+    core_engine = (
+        package_root
+        / "lib"
+        / "agent-cycle-v1.py"
+    )
+
+    identity = config["identity"]
+
+    if args.self_test:
+
+        emit(
+            "VALID",
+            None,
+            {
+                "mode":
+                    "RUNTIME_GATE_SELF_TEST",
+                "runtime_root":
+                    str(runtime_root),
+                "instance_id":
+                    identity["instance_id"],
+                "installation_id":
+                    identity[
+                        "installation_id"
+                    ],
+                "core_engine_present":
+                    core_engine.is_file(),
+                "mutation":
+                    "NONE",
+            },
+        )
+
+        return EXIT_VALID
+
+    if not core_engine.is_file():
+        refuse(
+            "DPL1.RUNTIME.CORE_ENGINE_MISSING",
+            {
+                "required":
+                    str(core_engine),
+                "mutation":
+                    "NONE",
+            },
+        )
+
+    python_bin = (
+        config
+        .get("service", {})
+        .get("python_bin")
+    )
+
+    if not isinstance(
+        python_bin,
+        str,
+    ):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "python_bin missing"
+            },
+        )
+
+    python_path = Path(python_bin)
+
+    if (
+        not python_path.is_absolute()
+        or not python_path.is_file()
+        or not os.access(
+            python_path,
+            os.X_OK,
+        )
+    ):
+        refuse(
+            "DPL1.RUNTIME.CONFIG_INVALID",
+            {
+                "error":
+                    "python_bin invalid"
+            },
+        )
+
+    os.execv(
+        str(python_path),
+        [
+            str(python_path),
+            "-I",
+            "-B",
+            str(core_engine),
+            "--instance-config",
+            str(
+                args.instance_config.resolve()
+            ),
+        ],
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
